@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { useGetOneData } from '@/shared/hooks/use-get-one-data';
 import type { DockerStatus } from '../../../shared/types/docker';
 import { dockerApi } from '../api/docker.api';
 
@@ -8,22 +9,46 @@ import { dockerApi } from '../api/docker.api';
  * Responsibility: Polling Docker daemon status
  */
 export function useDockerStatus() {
-  const [dockerStatus, setDockerStatus] = useState<DockerStatus | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [shouldShowOverlay, setShouldShowOverlay] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const checkDockerStatusRef = useRef<
+    (showNotifications?: boolean) => Promise<void>
+  >(async () => {});
+
+  const {
+    data: dockerStatus,
+    fetch: fetchStatus,
+    setData: setDockerStatus,
+  } = useGetOneData<DockerStatus | null>({
+    request: dockerApi.getStatus,
+    initialData: null,
+  });
 
   /**
    * Check Docker status
    */
-  const checkDockerStatus = useCallback(async (showNotifications = false) => {
-    try {
-      const status = await dockerApi.getStatus();
+  const checkDockerStatus = useCallback(
+    async (showNotifications = false) => {
+      const status = await fetchStatus();
 
-      console.log(status);
+      if (!status) {
+        setDockerStatus({
+          status: 'error',
+          error: 'Could not connect to Docker',
+        });
+        setShouldShowOverlay(true);
 
-      setDockerStatus(status);
+        if (retryTimeoutRef.current) {
+          clearTimeout(retryTimeoutRef.current);
+        }
+
+        retryTimeoutRef.current = setTimeout(() => {
+          void checkDockerStatusRef.current(false);
+        }, 10000);
+        return;
+      }
 
       if (status.status !== 'running') {
         setShouldShowOverlay(true);
@@ -33,23 +58,13 @@ export function useDockerStatus() {
           toast.success('Docker is available');
         }
       }
-    } catch (error) {
-      console.error('Error checking Docker status:', error);
-      setDockerStatus({
-        status: 'error',
-        error: 'Could not connect to Docker',
-      });
-      setShouldShowOverlay(true);
+    },
+    [fetchStatus, setDockerStatus],
+  );
 
-      // Retry after 10 seconds
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-      }
-      retryTimeoutRef.current = setTimeout(() => {
-        checkDockerStatus();
-      }, 10000);
-    }
-  }, []);
+  useEffect(() => {
+    checkDockerStatusRef.current = checkDockerStatus;
+  }, [checkDockerStatus]);
 
   /**
    * Manually refresh status
@@ -67,7 +82,7 @@ export function useDockerStatus() {
     if (intervalRef.current) return;
 
     intervalRef.current = setInterval(() => {
-      checkDockerStatus();
+      void checkDockerStatus();
     }, 30000);
   }, [checkDockerStatus]);
 
@@ -87,7 +102,7 @@ export function useDockerStatus() {
 
   // Initial check and setup
   useEffect(() => {
-    checkDockerStatus();
+    void checkDockerStatus();
     startPeriodicCheck();
 
     return () => {
@@ -95,13 +110,13 @@ export function useDockerStatus() {
     };
   }, [checkDockerStatus, startPeriodicCheck, stopPeriodicCheck]);
 
-  // Handle visibility change to pause/resume checking when tab is not active
+  // Pause polling while tab is hidden
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         stopPeriodicCheck();
       } else {
-        checkDockerStatus();
+        void checkDockerStatus();
         startPeriodicCheck();
       }
     };

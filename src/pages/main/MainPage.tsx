@@ -40,6 +40,8 @@ export function MainPage() {
         checkingUpdate={updater.checking}
         downloadingUpdate={updater.downloading}
         onCheckForUpdates={() => updater.checkForUpdates(false)}
+        dockerAvailable={page.isDockerAvailable}
+        dockerError={page.dockerStatus?.error}
       />
 
       <DeleteConfirmationDialog
